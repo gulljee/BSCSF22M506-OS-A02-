@@ -1,13 +1,16 @@
 /*
-* Programming Assignment 02: lsv1.2.0
+* Programming Assignment 02: lsv1.3.0
 * This version supports:
 *   - Default multi-column directory listing (down then across)
 *   - Long listing format using -l
+*   - Horizontal (row-major) listing using -x
 * Usage:
-*       $ ./lsv1.2.0
-*       $ ./lsv1.2.0 -l
-*       $ ./lsv1.2.0 /home /etc
-*       $ ./lsv1.2.0 -l /home/kali
+*       $ ./lsv1.3.0
+*       $ ./lsv1.3.0 -l
+*       $ ./lsv1.3.0 -x
+*       $ ./lsv1.3.0 /home /etc
+*       $ ./lsv1.3.0 -l /home/kali
+*       $ ./lsv1.3.0 -x /home/kali
 */
 
 #define _GNU_SOURCE
@@ -38,7 +41,7 @@ typedef struct {
 
 // ------------------------- FUNCTION DECLARATIONS -------------------------
 
-void do_ls(const char *dir);
+void do_ls(const char *dir, int horizontal);
 void do_ls_long(const char *dir);
 void print_permissions(mode_t mode);
 
@@ -46,21 +49,26 @@ FileList read_filenames(const char *dir);
 void free_filelist(FileList *fl);
 int get_terminal_width();
 void print_files_column(FileList fl);
+void print_files_horizontal(FileList fl);
 
 // ------------------------- MAIN FUNCTION -------------------------
 
 int main(int argc, char *argv[]) {
     int opt;
     int long_listing = 0;
+    int horizontal = 0;
 
     // Parse command-line options
-    while ((opt = getopt(argc, argv, "l")) != -1) {
+    while ((opt = getopt(argc, argv, "lx")) != -1) {
         switch (opt) {
             case 'l':
                 long_listing = 1;
                 break;
+            case 'x':
+                horizontal = 1;
+                break;
             default:
-                fprintf(stderr, "Usage: %s [-l] [directory...]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-l] [-x] [directory...]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
@@ -70,14 +78,14 @@ int main(int argc, char *argv[]) {
         if (long_listing)
             do_ls_long(".");
         else
-            do_ls(".");
+            do_ls(".", horizontal);
     } else {
         for (int i = optind; i < argc; i++) {
             printf("Directory listing of %s:\n", argv[i]);
             if (long_listing)
                 do_ls_long(argv[i]);
             else
-                do_ls(argv[i]);
+                do_ls(argv[i], horizontal);
             puts("");
         }
     }
@@ -87,10 +95,13 @@ int main(int argc, char *argv[]) {
 
 // ------------------------- SIMPLE COLUMN LISTING -------------------------
 
-void do_ls(const char *dir) {
+void do_ls(const char *dir, int horizontal) {
     FileList fl = read_filenames(dir);
     if (fl.count > 0) {
-        print_files_column(fl);
+        if (horizontal)
+            print_files_horizontal(fl);
+        else
+            print_files_column(fl); // default "down then across"
         free_filelist(&fl);
     }
 }
@@ -207,6 +218,7 @@ int get_terminal_width() {
     return w.ws_col;
 }
 
+// "Down then across" default column printing
 void print_files_column(FileList fl) {
     int term_width = get_terminal_width();
     int spacing = 2;
@@ -225,4 +237,23 @@ void print_files_column(FileList fl) {
         }
         printf("\n");
     }
+}
+
+// "Row-major" horizontal printing for -x option
+void print_files_horizontal(FileList fl) {
+    int term_width = get_terminal_width();
+    int spacing = 2;
+    int col_width = fl.max_len + spacing;
+    int pos = 0; // current horizontal position
+
+    for (int i = 0; i < fl.count; i++) {
+        int name_len = strlen(fl.names[i]);
+        if (pos + col_width > term_width) {
+            printf("\n");
+            pos = 0;
+        }
+        printf("%-*s", col_width, fl.names[i]);
+        pos += col_width;
+    }
+    printf("\n");
 }
