@@ -1,14 +1,15 @@
 /*
-* Programming Assignment 02: lsv1.0.0
+* Programming Assignment 02: lsv1.2.0
 * This version supports:
-*   - Basic directory listing
+*   - Default multi-column directory listing (down then across)
 *   - Long listing format using -l
 * Usage:
-*       $ ./lsv1.0.0
-*       $ ./lsv1.0.0 -l
-*       $ ./lsv1.0.0 /home /etc
-*       $ ./lsv1.0.0 -l /home/kali
+*       $ ./lsv1.2.0
+*       $ ./lsv1.2.0 -l
+*       $ ./lsv1.2.0 /home /etc
+*       $ ./lsv1.2.0 -l /home/kali
 */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,14 +23,29 @@
 #include <time.h>
 #include <getopt.h>
 #include <sys/types.h>
-
+#include <sys/ioctl.h>
+#include <termios.h>
 
 extern int errno;
 
-// Function declarations
+// ------------------------- DATA STRUCTURES -------------------------
+
+typedef struct {
+    char **names;   // array of filenames
+    int count;      // number of files
+    int max_len;    // length of longest filename
+} FileList;
+
+// ------------------------- FUNCTION DECLARATIONS -------------------------
+
 void do_ls(const char *dir);
 void do_ls_long(const char *dir);
 void print_permissions(mode_t mode);
+
+FileList read_filenames(const char *dir);
+void free_filelist(FileList *fl);
+int get_terminal_width();
+void print_files_column(FileList fl);
 
 // ------------------------- MAIN FUNCTION -------------------------
 
@@ -49,14 +65,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // If no directory is given, use current directory
+    // If no directories are given, use current directory
     if (optind == argc) {
         if (long_listing)
             do_ls_long(".");
         else
             do_ls(".");
-    } 
-    else {
+    } else {
         for (int i = optind; i < argc; i++) {
             printf("Directory listing of %s:\n", argv[i]);
             if (long_listing)
@@ -70,27 +85,14 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-// ------------------------- SIMPLE LISTING -------------------------
+// ------------------------- SIMPLE COLUMN LISTING -------------------------
 
 void do_ls(const char *dir) {
-    struct dirent *entry;
-    DIR *dp = opendir(dir);
-    if (dp == NULL) {
-        fprintf(stderr, "Cannot open directory: %s\n", dir);
-        return;
+    FileList fl = read_filenames(dir);
+    if (fl.count > 0) {
+        print_files_column(fl);
+        free_filelist(&fl);
     }
-
-    errno = 0;
-    while ((entry = readdir(dp)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
-        printf("%s\n", entry->d_name);
-    }
-
-    if (errno != 0)
-        perror("readdir failed");
-
-    closedir(dp);
 }
 
 // ------------------------- LONG LISTING -------------------------
@@ -116,28 +118,19 @@ void do_ls_long(const char *dir) {
             continue;
         }
 
-        // Print file permissions
         print_permissions(fileStat.st_mode);
-
-        // Number of links
         printf("%2lu ", fileStat.st_nlink);
 
-        // Owner and group
         struct passwd *pw = getpwuid(fileStat.st_uid);
         struct group  *gr = getgrgid(fileStat.st_gid);
-        printf("%s %s ", 
-            pw ? pw->pw_name : "unknown",
-            gr ? gr->gr_name : "unknown");
+        printf("%s %s ", pw ? pw->pw_name : "unknown", gr ? gr->gr_name : "unknown");
 
-        // File size
         printf("%8ld ", fileStat.st_size);
 
-        // Modification time
         char *timeStr = ctime(&fileStat.st_mtime);
-        timeStr[strlen(timeStr) - 1] = '\0';  // remove newline
+        timeStr[strlen(timeStr) - 1] = '\0'; // remove newline
         printf("%s ", timeStr);
 
-        // File name
         printf("%s\n", entry->d_name);
     }
 
@@ -167,4 +160,69 @@ void print_permissions(mode_t mode) {
     perms[10] = '\0';
 
     printf("%s ", perms);
+}
+
+// ------------------------- DYNAMIC FILENAME ARRAY -------------------------
+
+FileList read_filenames(const char *dir) {
+    DIR *dp = opendir(dir);
+    struct dirent *entry;
+    FileList fl = {NULL, 0, 0};
+
+    if (!dp) {
+        perror("Cannot open directory");
+        return fl;
+    }
+
+    while ((entry = readdir(dp)) != NULL) {
+        if (entry->d_name[0] == '.')
+            continue;
+
+        fl.names = realloc(fl.names, sizeof(char*) * (fl.count + 1));
+        fl.names[fl.count] = strdup(entry->d_name);
+        int len = strlen(entry->d_name);
+        if (len > fl.max_len) fl.max_len = len;
+        fl.count++;
+    }
+
+    closedir(dp);
+    return fl;
+}
+
+void free_filelist(FileList *fl) {
+    for (int i = 0; i < fl->count; i++)
+        free(fl->names[i]);
+    free(fl->names);
+    fl->names = NULL;
+    fl->count = 0;
+    fl->max_len = 0;
+}
+
+// ------------------------- TERMINAL COLUMN PRINTING -------------------------
+
+int get_terminal_width() {
+    struct winsize w;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1)
+        return 80; // fallback width
+    return w.ws_col;
+}
+
+void print_files_column(FileList fl) {
+    int term_width = get_terminal_width();
+    int spacing = 2;
+    int col_width = fl.max_len + spacing;
+    int cols = term_width / col_width;
+    if (cols == 0) cols = 1;
+
+    int rows = (fl.count + cols - 1) / cols; // ceil division
+
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            int idx = r + c * rows;
+            if (idx >= fl.count)
+                continue;
+            printf("%-*s", col_width, fl.names[idx]);
+        }
+        printf("\n");
+    }
 }
