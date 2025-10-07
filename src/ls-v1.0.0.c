@@ -1,16 +1,17 @@
 /*
-* Programming Assignment 02: lsv1.3.0
+* Programming Assignment 02: lsv1.4.0
 * This version supports:
 *   - Default multi-column directory listing (down then across)
 *   - Long listing format using -l
 *   - Horizontal (row-major) listing using -x
+*   - Alphabetical sorting of filenames
 * Usage:
-*       $ ./lsv1.3.0
-*       $ ./lsv1.3.0 -l
-*       $ ./lsv1.3.0 -x
-*       $ ./lsv1.3.0 /home /etc
-*       $ ./lsv1.3.0 -l /home/kali
-*       $ ./lsv1.3.0 -x /home/kali
+*       $ ./lsv1.4.0
+*       $ ./lsv1.4.0 -l
+*       $ ./lsv1.4.0 -x
+*       $ ./lsv1.4.0 /home /etc
+*       $ ./lsv1.4.0 -l /home/kali
+*       $ ./lsv1.4.0 -x /home/kali
 */
 
 #define _GNU_SOURCE
@@ -28,6 +29,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <strings.h>
 
 extern int errno;
 
@@ -50,6 +52,7 @@ void free_filelist(FileList *fl);
 int get_terminal_width();
 void print_files_column(FileList fl);
 void print_files_horizontal(FileList fl);
+int compare_filenames(const void *a, const void *b); // for qsort
 
 // ------------------------- MAIN FUNCTION -------------------------
 
@@ -109,19 +112,12 @@ void do_ls(const char *dir, int horizontal) {
 // ------------------------- LONG LISTING -------------------------
 
 void do_ls_long(const char *dir) {
-    struct dirent *entry;
-    DIR *dp = opendir(dir);
-    if (!dp) {
-        perror("Cannot open directory");
-        return;
-    }
+    FileList fl = read_filenames(dir); // read & sort
+    if (fl.count == 0) return;
 
-    while ((entry = readdir(dp)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
-
+    for (int i = 0; i < fl.count; i++) {
         char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, fl.names[i]);
 
         struct stat fileStat;
         if (stat(path, &fileStat) == -1) {
@@ -142,11 +138,12 @@ void do_ls_long(const char *dir) {
         timeStr[strlen(timeStr) - 1] = '\0'; // remove newline
         printf("%s ", timeStr);
 
-        printf("%s\n", entry->d_name);
+        printf("%s\n", fl.names[i]);
     }
 
-    closedir(dp);
+    free_filelist(&fl);
 }
+
 
 // ------------------------- PERMISSION STRING -------------------------
 
@@ -173,7 +170,13 @@ void print_permissions(mode_t mode) {
     printf("%s ", perms);
 }
 
-// ------------------------- DYNAMIC FILENAME ARRAY -------------------------
+// ------------------------- DYNAMIC FILENAME ARRAY WITH SORTING -------------------------
+
+int compare_filenames(const void *a, const void *b) {
+    const char *fa = *(const char **)a;
+    const char *fb = *(const char **)b;
+    return strcasecmp(fa, fb);
+}
 
 FileList read_filenames(const char *dir) {
     DIR *dp = opendir(dir);
@@ -197,6 +200,12 @@ FileList read_filenames(const char *dir) {
     }
 
     closedir(dp);
+
+    // Sort filenames alphabetically
+    if (fl.count > 1) {
+        qsort(fl.names, fl.count, sizeof(char *), compare_filenames);
+    }
+
     return fl;
 }
 
@@ -247,7 +256,6 @@ void print_files_horizontal(FileList fl) {
     int pos = 0; // current horizontal position
 
     for (int i = 0; i < fl.count; i++) {
-        int name_len = strlen(fl.names[i]);
         if (pos + col_width > term_width) {
             printf("\n");
             pos = 0;
