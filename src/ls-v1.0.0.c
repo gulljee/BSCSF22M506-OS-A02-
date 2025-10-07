@@ -1,19 +1,3 @@
-/*
-* Programming Assignment 02: lsv1.4.0
-* This version supports:
-*   - Default multi-column directory listing (down then across)
-*   - Long listing format using -l
-*   - Horizontal (row-major) listing using -x
-*   - Alphabetical sorting of filenames
-* Usage:
-*       $ ./lsv1.4.0
-*       $ ./lsv1.4.0 -l
-*       $ ./lsv1.4.0 -x
-*       $ ./lsv1.4.0 /home /etc
-*       $ ./lsv1.4.0 -l /home/kali
-*       $ ./lsv1.4.0 -x /home/kali
-*/
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,50 +17,45 @@
 
 extern int errno;
 
-// ------------------------- DATA STRUCTURES -------------------------
+#define COLOR_RESET   "\033[0m"
+#define COLOR_BLUE    "\033[0;34m"
+#define COLOR_GREEN   "\033[0;32m"
+#define COLOR_RED     "\033[0;31m"
+#define COLOR_PINK    "\033[0;35m"
+#define COLOR_REVERSE "\033[7m"
 
 typedef struct {
-    char **names;   // array of filenames
-    int count;      // number of files
-    int max_len;    // length of longest filename
+    char **names;
+    int count;
+    int max_len;
 } FileList;
-
-// ------------------------- FUNCTION DECLARATIONS -------------------------
 
 void do_ls(const char *dir, int horizontal);
 void do_ls_long(const char *dir);
 void print_permissions(mode_t mode);
-
+void print_colored_name(const char *path, const char *name);
 FileList read_filenames(const char *dir);
 void free_filelist(FileList *fl);
 int get_terminal_width();
-void print_files_column(FileList fl);
-void print_files_horizontal(FileList fl);
-int compare_filenames(const void *a, const void *b); // for qsort
-
-// ------------------------- MAIN FUNCTION -------------------------
+void print_files_column(const char *dir, FileList fl);
+void print_files_horizontal(const char *dir, FileList fl);
+int compare_filenames(const void *a, const void *b);
 
 int main(int argc, char *argv[]) {
     int opt;
     int long_listing = 0;
     int horizontal = 0;
 
-    // Parse command-line options
     while ((opt = getopt(argc, argv, "lx")) != -1) {
         switch (opt) {
-            case 'l':
-                long_listing = 1;
-                break;
-            case 'x':
-                horizontal = 1;
-                break;
+            case 'l': long_listing = 1; break;
+            case 'x': horizontal = 1; break;
             default:
                 fprintf(stderr, "Usage: %s [-l] [-x] [directory...]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
 
-    // If no directories are given, use current directory
     if (optind == argc) {
         if (long_listing)
             do_ls_long(".");
@@ -96,23 +75,43 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-// ------------------------- SIMPLE COLUMN LISTING -------------------------
+void print_colored_name(const char *path, const char *name) {
+    struct stat st;
+    if (lstat(path, &st) == -1) {
+        perror("lstat");
+        printf("%s", name);
+        return;
+    }
+
+    const char *color = COLOR_RESET;
+
+    if (S_ISDIR(st.st_mode))
+        color = COLOR_BLUE;
+    else if (S_ISLNK(st.st_mode))
+        color = COLOR_PINK;
+    else if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) || S_ISSOCK(st.st_mode))
+        color = COLOR_REVERSE;
+    else if ((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP) || (st.st_mode & S_IXOTH))
+        color = COLOR_GREEN;
+    else if (strstr(name, ".tar") || strstr(name, ".gz") || strstr(name, ".zip"))
+        color = COLOR_RED;
+
+    printf("%s%s%s", color, name, COLOR_RESET);
+}
 
 void do_ls(const char *dir, int horizontal) {
     FileList fl = read_filenames(dir);
     if (fl.count > 0) {
         if (horizontal)
-            print_files_horizontal(fl);
+            print_files_horizontal(dir, fl);
         else
-            print_files_column(fl); // default "down then across"
+            print_files_column(dir, fl);
         free_filelist(&fl);
     }
 }
 
-// ------------------------- LONG LISTING -------------------------
-
 void do_ls_long(const char *dir) {
-    FileList fl = read_filenames(dir); // read & sort
+    FileList fl = read_filenames(dir);
     if (fl.count == 0) return;
 
     for (int i = 0; i < fl.count; i++) {
@@ -120,8 +119,8 @@ void do_ls_long(const char *dir) {
         snprintf(path, sizeof(path), "%s/%s", dir, fl.names[i]);
 
         struct stat fileStat;
-        if (stat(path, &fileStat) == -1) {
-            perror("stat");
+        if (lstat(path, &fileStat) == -1) {
+            perror("lstat");
             continue;
         }
 
@@ -135,17 +134,15 @@ void do_ls_long(const char *dir) {
         printf("%8ld ", fileStat.st_size);
 
         char *timeStr = ctime(&fileStat.st_mtime);
-        timeStr[strlen(timeStr) - 1] = '\0'; // remove newline
+        timeStr[strlen(timeStr) - 1] = '\0';
         printf("%s ", timeStr);
 
-        printf("%s\n", fl.names[i]);
+        print_colored_name(path, fl.names[i]);
+        printf("\n");
     }
 
     free_filelist(&fl);
 }
-
-
-// ------------------------- PERMISSION STRING -------------------------
 
 void print_permissions(mode_t mode) {
     char perms[11];
@@ -169,8 +166,6 @@ void print_permissions(mode_t mode) {
 
     printf("%s ", perms);
 }
-
-// ------------------------- DYNAMIC FILENAME ARRAY WITH SORTING -------------------------
 
 int compare_filenames(const void *a, const void *b) {
     const char *fa = *(const char **)a;
@@ -201,10 +196,8 @@ FileList read_filenames(const char *dir) {
 
     closedir(dp);
 
-    // Sort filenames alphabetically
-    if (fl.count > 1) {
+    if (fl.count > 1)
         qsort(fl.names, fl.count, sizeof(char *), compare_filenames);
-    }
 
     return fl;
 }
@@ -218,49 +211,53 @@ void free_filelist(FileList *fl) {
     fl->max_len = 0;
 }
 
-// ------------------------- TERMINAL COLUMN PRINTING -------------------------
-
 int get_terminal_width() {
     struct winsize w;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1)
-        return 80; // fallback width
+        return 80;
     return w.ws_col;
 }
 
-// "Down then across" default column printing
-void print_files_column(FileList fl) {
+void print_files_column(const char *dir, FileList fl) {
     int term_width = get_terminal_width();
     int spacing = 2;
     int col_width = fl.max_len + spacing;
     int cols = term_width / col_width;
     if (cols == 0) cols = 1;
-
-    int rows = (fl.count + cols - 1) / cols; // ceil division
+    int rows = (fl.count + cols - 1) / cols;
 
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             int idx = r + c * rows;
             if (idx >= fl.count)
                 continue;
-            printf("%-*s", col_width, fl.names[idx]);
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/%s", dir, fl.names[idx]);
+            print_colored_name(path, fl.names[idx]);
+            int name_len = strlen(fl.names[idx]);
+            int padding = col_width - name_len;
+            for (int s = 0; s < padding; s++) printf(" ");
         }
         printf("\n");
     }
 }
 
-// "Row-major" horizontal printing for -x option
-void print_files_horizontal(FileList fl) {
+void print_files_horizontal(const char *dir, FileList fl) {
     int term_width = get_terminal_width();
     int spacing = 2;
     int col_width = fl.max_len + spacing;
-    int pos = 0; // current horizontal position
-
+    int pos = 0;
     for (int i = 0; i < fl.count; i++) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", dir, fl.names[i]);
         if (pos + col_width > term_width) {
             printf("\n");
             pos = 0;
         }
-        printf("%-*s", col_width, fl.names[i]);
+        print_colored_name(path, fl.names[i]);
+        int name_len = strlen(fl.names[i]);
+        int padding = col_width - name_len;
+        for (int s = 0; s < padding; s++) printf(" ");
         pos += col_width;
     }
     printf("\n");
